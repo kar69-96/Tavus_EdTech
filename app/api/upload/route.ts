@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { uploadToBlob } from "@/lib/blob/upload";
 import { insertDoc } from "@/lib/db/documents";
+import { createSession } from "@/lib/db/sessions";
 
 export async function POST(req: NextRequest) {
   const form = await req.formData();
@@ -15,19 +16,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "File exceeds 50 MB limit" }, { status: 413 });
   }
 
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const blobUrl = await uploadToBlob(
-    `uploads/${sessionId}/${file.name}`,
-    buffer,
-    file.type || "application/octet-stream",
-  );
+  try {
+    await createSession(undefined, sessionId);
 
-  const doc = await insertDoc({
-    session_id: sessionId,
-    filename: file.name,
-    content_type: file.type || "application/octet-stream",
-    blob_url: blobUrl,
-  });
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const blobUrl = await uploadToBlob(
+      `uploads/${sessionId}/${file.name}`,
+      buffer,
+      file.type || "application/octet-stream",
+    );
 
-  return NextResponse.json({ id: doc.id, blob_url: blobUrl, filename: file.name });
+    const doc = await insertDoc({
+      session_id: sessionId,
+      filename: file.name,
+      content_type: file.type || "application/octet-stream",
+      blob_url: blobUrl,
+    });
+
+    return NextResponse.json({ id: doc.id, blob_url: blobUrl, filename: file.name });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Upload failed";
+    console.error("[upload] error:", err);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }

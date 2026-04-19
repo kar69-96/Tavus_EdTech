@@ -8,10 +8,11 @@ export interface Session {
   tutorial_blob_url: string | null;
 }
 
-export async function createSession(homework?: string): Promise<Session> {
+export async function createSession(homework?: string, id?: string): Promise<Session> {
   const result = await sql<Session>`
-    INSERT INTO sessions (homework)
-    VALUES (${homework ?? null})
+    INSERT INTO sessions (id, homework)
+    VALUES (${id ?? null}::uuid, ${homework ?? null})
+    ON CONFLICT (id) DO UPDATE SET homework = EXCLUDED.homework
     RETURNING *
   `;
   return result.rows[0];

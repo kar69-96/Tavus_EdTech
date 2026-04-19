@@ -28,6 +28,7 @@ export default function OnboardPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          sessionId: tempSessionId,
           homework: homework.trim() || undefined,
           docIds: docs.map((d) => d.id),
           prevSessionId: prevSessionId ?? undefined,

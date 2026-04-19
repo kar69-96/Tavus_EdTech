@@ -32,7 +32,8 @@ export function UploadZone({ sessionId, onUploaded }: UploadZoneProps) {
         form.append("sessionId", sessionId);
         const res = await fetch("/api/upload", { method: "POST", body: form });
         if (!res.ok) {
-          setError(`Failed to upload ${file.name}`);
+          const body = await res.json().catch(() => ({}));
+          setError(`Failed to upload ${file.name}: ${body.error ?? res.statusText}`);
         } else {
           const data = await res.json();
           onUploaded({ id: data.id, filename: data.filename });

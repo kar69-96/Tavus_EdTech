@@ -10,6 +10,7 @@ import { getAnthropicClient } from "@/lib/api/anthropic-client";
 import { del } from "@vercel/blob";
 
 const Body = z.object({
+  sessionId: z.string().uuid().optional(),
   homework: z.string().max(2000).optional(),
   docIds: z.array(z.string().uuid()).max(10),
   prevSessionId: z.string().uuid().optional(),
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   }
 
-  const { homework, docIds, prevSessionId } = parsed.data;
+  const { sessionId: tempSessionId, homework, docIds, prevSessionId } = parsed.data;
 
   // Reset blob storage from previous session
   if (prevSessionId) {
@@ -55,7 +56,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const session = await createSession(homework);
+  const session = await createSession(homework, tempSessionId);
   const sessionId = session.id;
 
   if (!homework || homework.trim().length === 0) {
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
 
   // Fetch doc excerpts for tutorial generation
   const allDocs = docIds.length > 0 ? await listDocsBySession(sessionId) : [];
+  // docIds from client are validated against what was actually uploaded to this session
   const docExcerpts = await Promise.all(
     allDocs.slice(0, 3).map(async (doc) => {
       const text = await fetchBlobText(doc.blob_url, doc.content_type, 1500).catch(() => "");
