@@ -35,7 +35,7 @@ Copy `.env.example` → `.env.local`. Required vars:
 Browser → Next.js App Router (app/)
   └─ API routes (app/api/) — server-only, never called client-side directly
        ├─ /api/chat          → lib/agent/pal-agent.ts  (SSE streaming)
-       ├─ /api/whiteboard    → lib/agent/whiteboard-agent.ts
+       ├─ /api/whiteboard    → POST persists HTML to DB; GET /api/whiteboard/widget/[id] serves HTML
        ├─ /api/upload        → lib/blob/upload.ts → DB
        ├─ /api/onboarding    → creates session, generates tutorial JSON, fires whiteboards
        ├─ /api/tutorial/[id] → fetches tutorial JSON from Blob
@@ -48,23 +48,22 @@ Browser → Next.js App Router (app/)
 
 Two tools are registered:
 - **`doc_fetch(doc_id)`** — fetches a student-uploaded doc from Blob, parses PDF/DOCX/TXT, returns first 3000 chars
-- **`whiteboard(concept, prior_widget_url?)`** — calls `whiteboard-agent.ts`, which generates a self-contained HTML/D3 file, uploads it to Blob, and returns the URL. The agent calls this **autonomously** mid-explanation — the student never triggers it.
+- **`whiteboard(concept, prior_whiteboard_id?)`** — calls `whiteboard-agent.ts`, which generates a self-contained HTML/D3 file, stores it in Postgres (`whiteboards.html`), and returns `whiteboard_id`. With `prior_whiteboard_id`, the same row is updated in place. The agent calls this **autonomously** mid-explanation — the student never triggers it.
 
 Stuck detection runs fire-and-forget on each user turn: keyword match first, then a Haiku classifier call if no keyword hit.
 
 ### Whiteboard sub-agent (`lib/agent/whiteboard-agent.ts`)
 
-Separate Claude Sonnet call. Generates a self-contained `<html>` file using D3 v7 (CDN only, no external assets). Retries up to 3× on invalid HTML. Prior widget HTML is passed as context for iterative revisions. Uploaded to `renders/{sessionId}/{id}.html` in Blob.
+Separate Claude Sonnet call. Generates a self-contained `<html>` file using D3 v7 (CDN only, no external assets). Retries up to 3× on invalid HTML. Prior HTML is loaded from the DB when `prior_whiteboard_id` is set. Persisted to the `whiteboards` table (`html` column); the session iframe loads `GET /api/whiteboard/widget/[id]?sessionId=…`.
 
 ### Storage layout (Vercel Blob)
 
 | Path | Contents |
 |---|---|
 | `uploads/{sessionId}/{filename}` | Student-uploaded docs |
-| `renders/{sessionId}/{id}.html` | Whiteboard HTML widgets |
 | `tutorials/{sessionId}/tutorial.json` | Generated tutorial JSON |
 
-Tutorial JSON shape: `{ session_id, homework, steps: [{ id, title, explanation, needs_whiteboard, whiteboard_url? }] }`.
+Tutorial JSON shape: `{ session_id, homework, steps: [{ id, title, explanation, needs_whiteboard, whiteboard_id? }] }` (`whiteboard_id` is a `whiteboards` row UUID; legacy tutorials may still have `whiteboard_url`).
 
 ### Database (`lib/db/`)
 
@@ -76,7 +75,7 @@ Raw SQL via `@vercel/postgres`. Four tables: `sessions`, `documents`, `turns`, `
 
 ### Client state (`lib/store.ts`)
 
-Zustand store with `persist` middleware. Persists only `sessionId` and `mode` to localStorage — messages and whiteboard URL are ephemeral. `mode` is `"text" | "avatar"` — both modes share the same backend and the same `whiteboardUrl` state.
+Zustand store with `persist` middleware. Persists only `sessionId` and `mode` to localStorage — messages and whiteboard iframe `src` (`whiteboardUrl`) are ephemeral. `mode` is `"text" | "avatar"` — both modes share the same backend and the same whiteboard panel state.
 
 ### Key constraint: env validation is lazy
 

@@ -4,7 +4,6 @@ import { createTavusClient, TavusError } from "@/lib/api/tavus-client";
 import { resolveTavusApiKeyFromRequest } from "@/lib/api/resolve-key";
 import { composePalSystemPrompt } from "@/lib/prompt/pal-system";
 import { getSession } from "@/lib/db/sessions";
-import { listDocsBySession } from "@/lib/db/documents";
 import { env } from "@/lib/api/env";
 
 const Body = z.object({
@@ -26,26 +25,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  let tutorialJson: string | undefined;
-  if (session.tutorial_blob_url) {
-    try {
-      const res = await fetch(session.tutorial_blob_url);
-      if (res.ok) tutorialJson = await res.text();
-    } catch {
-      // non-fatal
-    }
-  }
-
-  const docs = await listDocsBySession(sessionId);
-  const systemPrompt = composePalSystemPrompt({
-    tutorialJson,
-    docFilenames: docs.map((d) => d.filename),
-  });
-
   try {
     const result = await client.createPersona({
       persona_name: `PAL-${sessionId.slice(0, 8)}`,
-      system_prompt: systemPrompt,
+      system_prompt: composePalSystemPrompt(),
       default_replica_id: env.TAVUS_REPLICA_ID,
     });
     return NextResponse.json({ personaId: result.persona_id });

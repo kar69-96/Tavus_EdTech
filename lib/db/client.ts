@@ -15,6 +15,11 @@ function getSql(): ReturnType<typeof neon> {
   return _sql;
 }
 
+function wrapDbError(err: unknown): ConfigError {
+  console.error("[db] query failed:", err);
+  return new ConfigError("Database query failed", err);
+}
+
 export function sql<T = Record<string, unknown>>(
   strings: TemplateStringsArray,
   ...values: unknown[]
@@ -27,7 +32,7 @@ export function sql<T = Record<string, unknown>>(
   }
   return neonSql(strings, ...values)
     .then((rows) => ({ rows: rows as T[] }))
-    .catch((err) => Promise.reject(new ConfigError("Database query failed", err)));
+    .catch((err) => Promise.reject(wrapDbError(err)));
 }
 
 export const query = (text: string, values?: unknown[]) => {
@@ -39,5 +44,5 @@ export const query = (text: string, values?: unknown[]) => {
   }
   return neonSql(text as unknown as TemplateStringsArray, ...(values ?? []))
     .then((rows) => ({ rows }))
-    .catch((err) => Promise.reject(new ConfigError("Database query failed", err)));
+    .catch((err) => Promise.reject(wrapDbError(err)));
 };

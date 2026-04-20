@@ -12,6 +12,9 @@ interface TutorialStep {
   title: string;
   explanation: string;
   needs_whiteboard: boolean;
+  /** Current storage: same-origin widget id */
+  whiteboard_id?: string;
+  /** Legacy tutorials only */
   whiteboard_url?: string;
 }
 
@@ -54,9 +57,13 @@ export default function SessionPage() {
         if (data?.steps) {
           setTutorial(data);
           const firstWhiteboard = data.steps.find(
-            (s: TutorialStep) => s.whiteboard_url,
+            (s: TutorialStep) => s.whiteboard_id || s.whiteboard_url,
           );
-          if (firstWhiteboard?.whiteboard_url) {
+          if (firstWhiteboard?.whiteboard_id) {
+            setWhiteboardUrl(
+              `/api/whiteboard/widget/${firstWhiteboard.whiteboard_id}?sessionId=${encodeURIComponent(id)}`,
+            );
+          } else if (firstWhiteboard?.whiteboard_url) {
             setWhiteboardUrl(firstWhiteboard.whiteboard_url);
           }
         }
@@ -153,11 +160,19 @@ export default function SessionPage() {
                       <li
                         key={step.id}
                         className="flex gap-2 cursor-pointer hover:text-[--fg-0] text-[--fg-2] text-xs transition-colors"
-                        onClick={() => step.whiteboard_url && setWhiteboardUrl(step.whiteboard_url)}
+                        onClick={() => {
+                          if (step.whiteboard_id) {
+                            setWhiteboardUrl(
+                              `/api/whiteboard/widget/${step.whiteboard_id}?sessionId=${encodeURIComponent(id)}`,
+                            );
+                          } else if (step.whiteboard_url) {
+                            setWhiteboardUrl(step.whiteboard_url);
+                          }
+                        }}
                       >
                         <span className="text-[--fg-2] shrink-0">{i + 1}.</span>
                         <span>{step.title}</span>
-                        {step.whiteboard_url && (
+                        {(step.whiteboard_id || step.whiteboard_url) && (
                           <span className="shrink-0 text-[9px]">⬛</span>
                         )}
                       </li>

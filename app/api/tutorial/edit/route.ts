@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getSession, setTutorialBlobUrl } from "@/lib/db/sessions";
 import { uploadToBlob } from "@/lib/blob/upload";
-import { generateWhiteboardWidget } from "@/lib/agent/whiteboard-agent";
+import { generateAndPersistWhiteboard } from "@/lib/agent/whiteboard-agent";
 
 const Body = z.object({
   sessionId: z.string().uuid(),
@@ -35,14 +35,12 @@ export async function POST(req: NextRequest) {
   if (explanation) step.explanation = explanation;
 
   if (rerenderWhiteboard) {
-    const widgetUrl = await generateWhiteboardWidget({
+    const { whiteboardId } = await generateAndPersistWhiteboard({
       concept: `${step.title}: ${step.explanation}`,
-      priorWidgetHtml: step.whiteboard_url
-        ? await fetch(step.whiteboard_url).then((r) => (r.ok ? r.text() : undefined)).catch(() => undefined)
-        : undefined,
       sessionId,
+      priorWhiteboardId: step.whiteboard_id,
     });
-    step.whiteboard_url = widgetUrl;
+    step.whiteboard_id = whiteboardId;
   }
 
   const tutorialUrl = await uploadToBlob(

@@ -18,6 +18,14 @@ export async function createSession(homework?: string, id?: string): Promise<Ses
   return result.rows[0];
 }
 
+/** Ensures a sessions row exists for FK (chunks, whiteboards). Does not overwrite existing rows. */
+export async function ensureSession(id: string): Promise<void> {
+  await sql`
+    INSERT INTO sessions (id) VALUES (${id}::uuid)
+    ON CONFLICT (id) DO NOTHING
+  `;
+}
+
 export async function getSession(id: string): Promise<Session | null> {
   const result = await sql<Session>`
     SELECT * FROM sessions WHERE id = ${id}

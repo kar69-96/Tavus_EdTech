@@ -4,11 +4,12 @@ import { ConfigError } from "@/lib/errors";
 import { createSession, setTutorialBlobUrl } from "@/lib/db/sessions";
 import { listDocsBySession } from "@/lib/db/documents";
 import { fetchBlobText } from "@/lib/blob/fetch-text";
-import { generateWhiteboardWidget } from "@/lib/agent/whiteboard-agent";
+import { generateAndPersistWhiteboard } from "@/lib/agent/whiteboard-agent";
 import { uploadToBlob } from "@/lib/blob/upload";
 import { buildTutorialPrompt } from "@/lib/prompt/tutorial-prompt";
 import { getAnthropicClient } from "@/lib/api/anthropic-client";
 import { del } from "@vercel/blob";
+import { indexChunks } from "@/lib/rag/index";
 
 const Body = z.object({
   sessionId: z.string().uuid().optional(),
@@ -22,7 +23,7 @@ interface TutorialStep {
   title: string;
   explanation: string;
   needs_whiteboard: boolean;
-  whiteboard_url?: string;
+  whiteboard_id?: string;
 }
 
 interface Tutorial {
@@ -57,11 +58,9 @@ async function handlePost(req: NextRequest) {
       const { list } = await import("@vercel/blob");
       const uploads = await list({ prefix: `uploads/${prevSessionId}/` });
       const tutorials = await list({ prefix: `tutorials/${prevSessionId}/` });
-      const renders = await list({ prefix: `renders/${prevSessionId}/` });
       const urls = [
         ...uploads.blobs.map((b) => b.url),
         ...tutorials.blobs.map((b) => b.url),
-        ...renders.blobs.map((b) => b.url),
       ];
       if (urls.length > 0) await del(urls);
     } catch {
@@ -120,11 +119,11 @@ async function handlePost(req: NextRequest) {
   for (const step of tutorial.steps) {
     if (step.needs_whiteboard) {
       try {
-        const widgetUrl = await generateWhiteboardWidget({
+        const { whiteboardId } = await generateAndPersistWhiteboard({
           concept: `${step.title}: ${step.explanation}`,
           sessionId,
         });
-        step.whiteboard_url = widgetUrl;
+        step.whiteboard_id = whiteboardId;
       } catch {
         // non-fatal — step proceeds without whiteboard
       }
@@ -138,6 +137,18 @@ async function handlePost(req: NextRequest) {
     "application/json",
   );
   await setTutorialBlobUrl(sessionId, tutorialUrl);
+
+  // Index tutorial steps into RAG (non-fatal)
+  Promise.all(
+    tutorial.steps.map((step) =>
+      indexChunks({
+        sessionId,
+        sourceType: "tutorial",
+        text: `${step.title}: ${step.explanation}`,
+        metadata: { step_id: step.id, title: step.title },
+      }),
+    ),
+  ).catch((err) => console.error("[onboarding] RAG indexing failed:", err));
 
   return NextResponse.json({ sessionId });
 }

@@ -1,8 +1,12 @@
 import "server-only";
 import { getAnthropicClient } from "../api/anthropic-client";
 import { ConfigError } from "../errors";
-import { uploadToBlob } from "../blob/upload";
-import { insertWhiteboard } from "../db/whiteboards";
+import { ensureSession } from "../db/sessions";
+import {
+  getWhiteboardByIdForSession,
+  insertWhiteboard,
+  updateWhiteboardHtml,
+} from "../db/whiteboards";
 
 const SYSTEM = `You are a data visualization expert. Generate a self-contained, single-file HTML document that visualizes the given concept.
 
@@ -25,12 +29,27 @@ function isValidHtml(html: string): boolean {
   );
 }
 
-export async function generateWhiteboardWidget(options: {
+async function loadPriorHtmlFromRow(row: {
+  html: string | null;
+  blob_url: string | null;
+}): Promise<string | undefined> {
+  if (row.html) return row.html;
+  if (row.blob_url) {
+    try {
+      const res = await fetch(row.blob_url);
+      if (res.ok) return await res.text();
+    } catch {
+      /* ignore */
+    }
+  }
+  return undefined;
+}
+
+export async function generateWhiteboardHtml(options: {
   concept: string;
   priorWidgetHtml?: string;
-  sessionId: string;
 }): Promise<string> {
-  const { concept, priorWidgetHtml, sessionId } = options;
+  const { concept, priorWidgetHtml } = options;
   const client = getAnthropicClient();
 
   const userContent = priorWidgetHtml
@@ -44,7 +63,13 @@ export async function generateWhiteboardWidget(options: {
   while (attempt < 3) {
     attempt++;
     const messages: Array<{ role: "user" | "assistant"; content: string }> = [
-      { role: "user", content: attempt === 1 ? userContent : `${userContent}\n\nPrevious attempt failed: ${lastError}\n\nFix it and return valid HTML only.` },
+      {
+        role: "user",
+        content:
+          attempt === 1
+            ? userContent
+            : `${userContent}\n\nPrevious attempt failed: ${lastError}\n\nFix it and return valid HTML only.`,
+      },
     ];
 
     let msg: Awaited<ReturnType<typeof client.messages.create>>;
@@ -74,19 +99,51 @@ export async function generateWhiteboardWidget(options: {
     throw new Error("Whiteboard agent failed to produce valid HTML after 3 attempts");
   }
 
-  const id = crypto.randomUUID();
-  const blobUrl = await uploadToBlob(
-    `renders/${sessionId}/${id}.html`,
-    html,
-    "text/html",
-  );
+  return html;
+}
 
-  await insertWhiteboard({
+/**
+ * Generate D3 HTML and persist to Postgres (insert or in-place update when priorWhiteboardId is set).
+ */
+export async function generateAndPersistWhiteboard(options: {
+  sessionId: string;
+  concept: string;
+  priorWhiteboardId?: string;
+}): Promise<{ whiteboardId: string }> {
+  const { sessionId, concept, priorWhiteboardId } = options;
+
+  await ensureSession(sessionId);
+
+  let priorWidgetHtml: string | undefined;
+  if (priorWhiteboardId) {
+    const row = await getWhiteboardByIdForSession(priorWhiteboardId, sessionId);
+    if (row) {
+      priorWidgetHtml = await loadPriorHtmlFromRow(row);
+    }
+  }
+
+  const html = await generateWhiteboardHtml({ concept, priorWidgetHtml });
+
+  if (priorWhiteboardId) {
+    const updated = await updateWhiteboardHtml({
+      id: priorWhiteboardId,
+      session_id: sessionId,
+      html,
+      prompt: concept,
+    });
+    if (updated) {
+      return { whiteboardId: updated.id };
+    }
+    /* fall through to insert if id was invalid for this session */
+  }
+
+  const inserted = await insertWhiteboard({
     session_id: sessionId,
-    blob_url: blobUrl,
+    blob_url: null,
+    html,
     widget_type: "d3",
     prompt: concept,
   });
 
-  return blobUrl;
+  return { whiteboardId: inserted.id };
 }

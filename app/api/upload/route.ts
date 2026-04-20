@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { uploadToBlob } from "@/lib/blob/upload";
 import { insertDoc } from "@/lib/db/documents";
 import { createSession } from "@/lib/db/sessions";
+import { fetchBlobText } from "@/lib/blob/fetch-text";
+import { indexChunks } from "@/lib/rag/index";
 
 export async function POST(req: NextRequest) {
   const form = await req.formData();
@@ -32,6 +34,19 @@ export async function POST(req: NextRequest) {
       content_type: file.type || "application/octet-stream",
       blob_url: blobUrl,
     });
+
+    // Index document text into RAG (non-fatal if parsing fails)
+    fetchBlobText(blobUrl, file.type || "application/octet-stream")
+      .then((text) =>
+        indexChunks({
+          sessionId,
+          sourceType: "doc",
+          sourceId: doc.id,
+          text,
+          metadata: { filename: file.name },
+        }),
+      )
+      .catch((err) => console.error("[upload] RAG indexing failed:", err));
 
     return NextResponse.json({ id: doc.id, blob_url: blobUrl, filename: file.name });
   } catch (err) {

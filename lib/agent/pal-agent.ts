@@ -2,21 +2,22 @@ import "server-only";
 import type Anthropic from "@anthropic-ai/sdk";
 import { ConfigError } from "../errors";
 import { getAnthropicClient } from "../api/anthropic-client";
-import { getDocById } from "../db/documents";
-import { insertTurn, getTurns } from "../db/turns";
-import { getSession } from "../db/sessions";
-import { fetchBlobText } from "../blob/fetch-text";
-import { generateWhiteboardWidget } from "./whiteboard-agent";
+import { generateAndPersistWhiteboard } from "./whiteboard-agent";
 import { detectAndMarkStuck } from "./stuck-detector";
-import { docFetchTool } from "../tools/doc-fetch-tool";
+import { ragSearchTool } from "../tools/rag-search-tool";
 import { whiteboardTool } from "../tools/whiteboard-tool";
 import { composePalSystemPrompt } from "../prompt/pal-system";
+import { indexChunks } from "../rag/index";
+import { searchChunks, formatSearchResults } from "../rag/search";
+import { recentChunks } from "../db/chunks";
+import { ensureSession, getSession } from "../db/sessions";
 import { listDocsBySession } from "../db/documents";
 
 export interface AgentChunk {
-  type: "text" | "whiteboard";
+  type: "text" | "whiteboard" | "error" | "status";
   text?: string;
-  widgetUrl?: string;
+  /** DB row id; client builds /api/whiteboard/widget/[id]?sessionId=… */
+  whiteboardId?: string;
 }
 
 export async function* runPalAgent(options: {
@@ -25,34 +26,35 @@ export async function* runPalAgent(options: {
 }): AsyncGenerator<AgentChunk> {
   const { sessionId, message } = options;
 
-  const session = await getSession(sessionId);
-  if (!session) throw new Error("Session not found");
+  await ensureSession(sessionId);
 
-  const docs = await listDocsBySession(sessionId);
-  const turns = await getTurns(sessionId, 10);
+  const [session, docs, userChunks] = await Promise.all([
+    getSession(sessionId),
+    listDocsBySession(sessionId),
+    indexChunks({ sessionId, sourceType: "turn", text: message, metadata: { role: "user" } }),
+  ]);
 
-  let tutorialJson: string | undefined;
-  if (session.tutorial_blob_url) {
-    try {
-      const res = await fetch(session.tutorial_blob_url);
-      if (res.ok) tutorialJson = await res.text();
-    } catch {
-      // non-fatal
-    }
+  const userChunkId = userChunks[0]?.id;
+  if (userChunkId) {
+    detectAndMarkStuck(userChunkId, message).catch(() => {});
   }
 
   const systemPrompt = composePalSystemPrompt({
-    tutorialJson,
     docFilenames: docs.map((d) => d.filename),
+    hasTutorial: !!session?.tutorial_blob_url,
   });
 
-  const userTurn = await insertTurn({ session_id: sessionId, role: "user", content: message });
-
-  // fire-and-forget stuck detection
-  detectAndMarkStuck(userTurn.id, message).catch(() => {});
+  // Build recent history (last 4 turn chunks) for short-term coherence
+  const recent = await recentChunks(sessionId, 4);
+  const historyMessages: Anthropic.MessageParam[] = recent
+    .filter((c) => c.content !== message)
+    .map((c) => ({
+      role: (c.metadata as { role?: string }).role === "assistant" ? "assistant" : "user",
+      content: c.content,
+    }));
 
   const messages: Anthropic.MessageParam[] = [
-    ...turns.map((t) => ({ role: t.role as "user" | "assistant", content: t.content })),
+    ...historyMessages,
     { role: "user", content: message },
   ];
 
@@ -60,13 +62,13 @@ export async function* runPalAgent(options: {
   let fullAssistantText = "";
 
   try {
-    // Agentic loop — tool calls may be nested
     while (true) {
       const stream = client.messages.stream({
         model: "claude-sonnet-4-6",
-        max_tokens: 1024,
+        // Room for tool_use blocks after text; 1024 can truncate before tools on longer replies
+        max_tokens: 4096,
         system: systemPrompt,
-        tools: [docFetchTool, whiteboardTool],
+        tools: [ragSearchTool, whiteboardTool],
         messages,
       });
 
@@ -96,36 +98,48 @@ export async function* runPalAgent(options: {
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
       for (const tool of toolUseBlocks) {
-        if (tool.name === "doc_fetch") {
-          const input = tool.input as { doc_id: string };
+        if (tool.name === "rag_search") {
+          const input = tool.input as { query: string; k?: number };
           try {
-            const doc = await getDocById(input.doc_id);
-            if (!doc) {
-              toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: "Document not found." });
-            } else {
-              const text = await fetchBlobText(doc.blob_url, doc.content_type);
-              toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: text });
-            }
+            const results = await searchChunks({ sessionId, query: input.query, k: input.k });
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: tool.id,
+              content: formatSearchResults(results),
+            });
           } catch (err) {
-            toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: `Error: ${String(err)}` });
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: tool.id,
+              content: `Search failed: ${String(err)}`,
+            });
           }
         } else if (tool.name === "whiteboard") {
-          const input = tool.input as { concept: string; prior_widget_url?: string };
+          const input = tool.input as { concept: string; prior_whiteboard_id?: string };
           try {
-            let priorHtml: string | undefined;
-            if (input.prior_widget_url) {
-              const res = await fetch(input.prior_widget_url);
-              if (res.ok) priorHtml = await res.text();
-            }
-            const widgetUrl = await generateWhiteboardWidget({
-              concept: input.concept,
-              priorWidgetHtml: priorHtml,
+            yield {
+              type: "status",
+              text: "Drawing on the whiteboard…",
+            };
+            const { whiteboardId } = await generateAndPersistWhiteboard({
               sessionId,
+              concept: input.concept,
+              priorWhiteboardId: input.prior_whiteboard_id,
             });
-            yield { type: "whiteboard", widgetUrl };
-            toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: JSON.stringify({ widget_url: widgetUrl }) });
+            yield { type: "whiteboard", whiteboardId };
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: tool.id,
+              content: JSON.stringify({ whiteboard_id: whiteboardId }),
+            });
           } catch (err) {
-            toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: `Whiteboard failed: ${String(err)}` });
+            const msg = `Whiteboard failed: ${String(err)}`;
+            yield { type: "error", text: msg };
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: tool.id,
+              content: msg,
+            });
           }
         }
       }
@@ -142,7 +156,13 @@ export async function* runPalAgent(options: {
     throw err;
   }
 
+  // Do not await — indexing can take seconds and would delay the SSE [DONE], leaving the UI on "thinking…"
   if (fullAssistantText) {
-    await insertTurn({ session_id: sessionId, role: "assistant", content: fullAssistantText });
+    void indexChunks({
+      sessionId,
+      sourceType: "turn",
+      text: fullAssistantText,
+      metadata: { role: "assistant" },
+    }).catch((e) => console.error("[pal-agent] assistant indexChunks failed:", e));
   }
 }

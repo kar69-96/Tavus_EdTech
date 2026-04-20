@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
@@ -13,6 +13,11 @@ describe("db/client", () => {
     vi.resetModules();
     mockQuery.mockReset();
     process.env.DATABASE_URL = "postgres://user:pass@host/db";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("sql() returns { rows } on success", async () => {

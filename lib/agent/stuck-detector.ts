@@ -1,6 +1,6 @@
 import "server-only";
 import { getAnthropicClient } from "../api/anthropic-client";
-import { markStuck } from "../db/turns";
+import { markChunkStuck } from "../db/chunks";
 
 const STUCK_KEYWORDS = [
   "don't understand",
@@ -37,19 +37,19 @@ async function classifyWithLlm(text: string): Promise<boolean> {
 }
 
 export async function detectAndMarkStuck(
-  turnId: string,
+  chunkId: string,
   content: string,
 ): Promise<void> {
   const lower = content.toLowerCase();
   const keywordHit = STUCK_KEYWORDS.some((kw) => lower.includes(kw));
 
   if (keywordHit) {
-    await markStuck(turnId);
+    await markChunkStuck(chunkId);
     return;
   }
 
   const llmHit = await classifyWithLlm(content);
   if (llmHit) {
-    await markStuck(turnId);
+    await markChunkStuck(chunkId);
   }
 }

@@ -7,6 +7,7 @@ export function ChatPanel() {
   const { sessionId, messages, addMessage, appendToLastAssistant, setWhiteboardUrl } = useSession();
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [statusLine, setStatusLine] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -18,6 +19,7 @@ export function ChatPanel() {
     const text = input.trim();
     setInput("");
     setLoading(true);
+    setStatusLine(null);
 
     addMessage({ id: crypto.randomUUID(), role: "user", content: text });
 
@@ -27,33 +29,78 @@ export function ChatPanel() {
       body: JSON.stringify({ sessionId, message: text }),
     });
 
-    if (!res.body) { setLoading(false); return; }
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.statusText);
+      appendToLastAssistant(`[Error ${res.status}: ${errText.slice(0, 500)}]`);
+      setLoading(false);
+      setStatusLine(null);
+      return;
+    }
+
+    if (!res.body) {
+      setLoading(false);
+      setStatusLine(null);
+      return;
+    }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
+    let sseBuffer = "";
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const lines = decoder.decode(value).split("\n").filter((l) => l.startsWith("data: "));
-      for (const line of lines) {
-        const raw = line.slice(6);
-        if (raw === "[DONE]") { setLoading(false); return; }
-        try {
-          const chunk = JSON.parse(raw);
-          if (chunk.type === "text" && chunk.text) {
-            appendToLastAssistant(chunk.text);
-          } else if (chunk.type === "whiteboard" && chunk.widgetUrl) {
-            setWhiteboardUrl(chunk.widgetUrl);
+    function consumeSseLines() {
+      // Events are separated by \n\n; lines may arrive split across reads.
+      let sep: number;
+      while ((sep = sseBuffer.indexOf("\n\n")) >= 0) {
+        const block = sseBuffer.slice(0, sep);
+        sseBuffer = sseBuffer.slice(sep + 2);
+        for (const line of block.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trimEnd();
+          if (raw === "[DONE]") {
+            setLoading(false);
+            setStatusLine(null);
+            return true;
           }
-        } catch {
-          // malformed chunk — skip
+          try {
+            const chunk = JSON.parse(raw) as {
+              type?: string;
+              text?: string;
+              whiteboardId?: string;
+            };
+            if (chunk.type === "text" && chunk.text) {
+              appendToLastAssistant(chunk.text);
+            } else if (chunk.type === "status" && chunk.text) {
+              setStatusLine(chunk.text);
+            } else if (chunk.type === "whiteboard" && chunk.whiteboardId && sessionId) {
+              const src = `/api/whiteboard/widget/${chunk.whiteboardId}?sessionId=${encodeURIComponent(sessionId)}`;
+              setWhiteboardUrl(src);
+              setStatusLine(null);
+            } else if (chunk.type === "error" && chunk.text) {
+              appendToLastAssistant(`[Error: ${chunk.text}]`);
+              setStatusLine(null);
+            }
+          } catch {
+            // malformed JSON — skip this line
+          }
         }
       }
+      return false;
     }
 
-    setLoading(false);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        sseBuffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+        sseBuffer = sseBuffer.replace(/\r\n/g, "\n");
+        if (consumeSseLines()) return;
+        if (done) break;
+      }
+      sseBuffer += decoder.decode();
+      if (consumeSseLines()) return;
+    } finally {
+      setLoading(false);
+      setStatusLine(null);
+    }
   }
 
   return (
@@ -69,7 +116,9 @@ export function ChatPanel() {
         ))}
         {loading && (
           <div className="flex justify-start">
-            <span className="text-[--fg-2] text-xs animate-pulse">PAL is thinking…</span>
+            <span className="text-[--fg-2] text-xs animate-pulse">
+              {statusLine ?? "PAL is thinking…"}
+            </span>
           </div>
         )}
         <div ref={bottomRef} />
