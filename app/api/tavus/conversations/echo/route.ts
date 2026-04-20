@@ -2,12 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createTavusClient, TavusError } from "@/lib/api/tavus-client";
 import { resolveTavusApiKeyFromRequest } from "@/lib/api/resolve-key";
-import { composeTutorSystemPrompt } from "@/lib/prompt/pal-system";
-import { ensureSession } from "@/lib/db/sessions";
 import { env } from "@/lib/api/env";
 
 const Body = z.object({
-  sessionId: z.string().uuid(),
+  conversationId: z.string().min(1),
+  text: z.string().min(1).max(4000),
 });
 
 export async function POST(req: NextRequest) {
@@ -19,21 +18,13 @@ export async function POST(req: NextRequest) {
   const apiKey = resolveTavusApiKeyFromRequest(req) ?? env.TAVUS_API_KEY;
   const client = createTavusClient(apiKey);
 
-  const { sessionId } = parsed.data;
-  await ensureSession(sessionId);
+  const { conversationId, text } = parsed.data;
 
   try {
-    const result = await client.createPersona({
-      persona_name: `Tutor-${sessionId.slice(0, 8)}`,
-      system_prompt: composeTutorSystemPrompt(),
-      default_replica_id: env.TAVUS_REPLICA_ID,
-    });
-    return NextResponse.json({ personaId: result.persona_id });
+    await client.echoText(conversationId, text);
+    return NextResponse.json({ ok: true });
   } catch (err) {
     if (err instanceof TavusError) {
-      if (err.status === 402 || err.status === 429) {
-        return NextResponse.json({ error: "Quota exceeded", code: "quota" }, { status: err.status });
-      }
       return NextResponse.json({ error: err.message }, { status: 502 });
     }
     throw err;

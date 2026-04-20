@@ -6,7 +6,7 @@ import { generateAndPersistWhiteboard } from "./whiteboard-agent";
 import { detectAndMarkStuck } from "./stuck-detector";
 import { ragSearchTool } from "../tools/rag-search-tool";
 import { whiteboardTool } from "../tools/whiteboard-tool";
-import { composePalSystemPrompt } from "../prompt/pal-system";
+import { composeTutorSystemPrompt } from "../prompt/pal-system";
 import { indexChunks } from "../rag/index";
 import { searchChunks, formatSearchResults } from "../rag/search";
 import { recentChunks } from "../db/chunks";
@@ -39,7 +39,7 @@ export async function* runPalAgent(options: {
     detectAndMarkStuck(userChunkId, message).catch(() => {});
   }
 
-  const systemPrompt = composePalSystemPrompt({
+  const systemPrompt = composeTutorSystemPrompt({
     docFilenames: docs.map((d) => d.filename),
     hasTutorial: !!session?.tutorial_blob_url,
   });

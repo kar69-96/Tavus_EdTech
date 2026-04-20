@@ -24,8 +24,9 @@ export async function POST(req: NextRequest) {
   try {
     const result = await client.createConversation({
       persona_id: personaId,
-      conversation_name: `pal-session-${sessionId.slice(0, 8)}`,
-      custom_greeting: customGreeting ?? "Hi! I'm PAL, your AI tutor. Ready to get started?",
+      replica_id: env.TAVUS_REPLICA_ID,
+      conversation_name: `tutor-session-${sessionId.slice(0, 8)}`,
+      custom_greeting: customGreeting ?? "Hi! I'm your Tutor. Ready to get started?",
     });
     return NextResponse.json({
       conversationId: result.conversation_id,

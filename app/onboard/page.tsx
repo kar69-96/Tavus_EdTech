@@ -2,7 +2,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { UploadZone } from "@/components/onboarding/UploadZone";
-import { HomeworkInput } from "@/components/onboarding/HomeworkInput";
 import { useSession } from "@/lib/store";
 
 interface UploadedDoc {
@@ -16,7 +15,6 @@ export default function OnboardPage() {
 
   const [tempSessionId] = useState(() => crypto.randomUUID());
   const [docs, setDocs] = useState<UploadedDoc[]>([]);
-  const [homework, setHomework] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +27,6 @@ export default function OnboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: tempSessionId,
-          homework: homework.trim() || undefined,
           docIds: docs.map((d) => d.id),
           prevSessionId: prevSessionId ?? undefined,
         }),
@@ -54,7 +51,7 @@ export default function OnboardPage() {
             NEW SESSION
           </h2>
           <p className="text-[--fg-2] text-xs">
-            upload your notes and optionally paste the problem you&apos;re stuck on
+            upload your notes to get started
           </p>
         </div>
 
@@ -72,8 +69,6 @@ export default function OnboardPage() {
             ))}
           </ul>
         )}
-
-        <HomeworkInput value={homework} onChange={setHomework} />
 
         {error && <p className="text-red-400 text-xs">{error}</p>}
 

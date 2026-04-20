@@ -19,7 +19,7 @@ const pressStart = Press_Start_2P({
 });
 
 export const metadata: Metadata = {
-  title: "PAL — Your AI Tutor",
+  title: "Tutor — Your AI Tutor",
   description: "Personalized AI tutoring with an animated whiteboard and video avatar.",
 };
 

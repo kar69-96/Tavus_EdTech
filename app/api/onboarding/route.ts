@@ -71,7 +71,12 @@ async function handlePost(req: NextRequest) {
   const session = await createSession(homework, tempSessionId);
   const sessionId = session.id;
 
-  if (!homework || homework.trim().length === 0) {
+  const hasDocs = docIds.length > 0;
+  const effectiveHomework =
+    homework?.trim() ||
+    (hasDocs ? "Review and master the material in my uploaded notes." : "");
+
+  if (!effectiveHomework) {
     return NextResponse.json({ sessionId });
   }
 
@@ -87,7 +92,7 @@ async function handlePost(req: NextRequest) {
 
   // Generate tutorial JSON
   const client = getAnthropicClient();
-  const prompt = buildTutorialPrompt({ homework, docExcerpts });
+  const prompt = buildTutorialPrompt({ homework: effectiveHomework, docExcerpts });
   const msg = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 2048,
@@ -99,16 +104,16 @@ async function handlePost(req: NextRequest) {
     const raw = (msg.content[0] as { type: string; text: string }).text.trim();
     const json = raw.startsWith("{") ? raw : raw.slice(raw.indexOf("{"));
     const parsed = JSON.parse(json);
-    tutorial = { session_id: sessionId, homework, steps: parsed.steps };
+    tutorial = { session_id: sessionId, homework: effectiveHomework, steps: parsed.steps };
   } catch {
     tutorial = {
       session_id: sessionId,
-      homework,
+      homework: effectiveHomework,
       steps: [
         {
           id: "step-1",
           title: "Let's work through this together",
-          explanation: homework,
+          explanation: effectiveHomework,
           needs_whiteboard: false,
         },
       ],

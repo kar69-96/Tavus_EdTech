@@ -70,6 +70,7 @@ export interface CreatePersonaOutput {
 
 export interface CreateConversationInput {
   persona_id: string;
+  replica_id?: string;
   conversation_name: string;
   custom_greeting: string;
   document_retrieval_strategy?: "speed" | "balanced" | "quality";
@@ -205,6 +206,12 @@ export function createTavusClient(apiKey: string) {
       tavusFetch<unknown>(key, `/personas/${encodeURIComponent(personaId)}`, {
         method: "PATCH",
         json: operations,
+      }),
+
+    echoText: (conversationId: string, text: string) =>
+      tavusFetch<void>(key, `/conversations/${encodeURIComponent(conversationId)}/echo`, {
+        method: "POST",
+        json: { script: text },
       }),
   };
 }

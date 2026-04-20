@@ -1,10 +1,15 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
+import { useParams } from "next/navigation";
 import { useSession } from "@/lib/store";
 import { MessageBubble } from "./MessageBubble";
 
 export function ChatPanel() {
-  const { sessionId, messages, addMessage, appendToLastAssistant, setWhiteboardUrl } = useSession();
+  const params = useParams();
+  const routeSessionId = typeof params?.id === "string" ? params.id : null;
+  const { sessionId: storeSessionId, messages, addMessage, appendToLastAssistant, setWhiteboardUrl } =
+    useSession();
+  const sessionId = routeSessionId ?? storeSessionId;
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [statusLine, setStatusLine] = useState<string | null>(null);
@@ -108,7 +113,7 @@ export function ChatPanel() {
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && (
           <p className="text-[--fg-2] text-xs text-center mt-8 font-pixel">
-            ASK PAL ANYTHING
+            ASK YOUR TUTOR ANYTHING
           </p>
         )}
         {messages.map((m) => (
@@ -117,7 +122,7 @@ export function ChatPanel() {
         {loading && (
           <div className="flex justify-start">
             <span className="text-[--fg-2] text-xs animate-pulse">
-              {statusLine ?? "PAL is thinking…"}
+              {statusLine ?? "Tutor is thinking…"}
             </span>
           </div>
         )}

@@ -10,6 +10,8 @@ export const useCVICall = () => {
     ({ url }: { url: string }) => {
       daily?.join({
         url,
+        startVideoOff: true,
+        startAudioOff: true,
         inputSettings: {
           audio: {
             processor: {

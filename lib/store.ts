@@ -21,6 +21,7 @@ interface SessionState {
   appendToLastAssistant: (text: string) => void;
   setWhiteboardUrl: (url: string) => void;
   setConversation: (id: string, url: string) => void;
+  clearConversation: () => void;
   setMode: (mode: "text" | "avatar") => void;
   reset: () => void;
 }
@@ -31,7 +32,7 @@ const initial = {
   whiteboardUrl: null,
   conversationId: null,
   conversationUrl: null,
-  mode: "text" as const,
+  mode: "avatar" as const,
 };
 
 export const useSession = create<SessionState>()(
@@ -59,12 +60,14 @@ export const useSession = create<SessionState>()(
       setConversation: (id, url) =>
         set({ conversationId: id, conversationUrl: url }),
 
+      clearConversation: () => set({ conversationId: null, conversationUrl: null }),
+
       setMode: (mode) => set({ mode }),
 
       reset: () => set(initial),
     }),
     {
-      name: "pal-session",
+      name: "tutor-session",
       partialize: (s) => ({
         sessionId: s.sessionId,
         mode: s.mode,
