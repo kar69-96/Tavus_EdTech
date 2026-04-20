@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { ConfigError } from "@/lib/errors";
 import { createSession, setTutorialBlobUrl } from "@/lib/db/sessions";
 import { listDocsBySession } from "@/lib/db/documents";
 import { fetchBlobText } from "@/lib/blob/fetch-text";
@@ -31,6 +32,18 @@ interface Tutorial {
 }
 
 export async function POST(req: NextRequest) {
+  try {
+    return await handlePost(req);
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      return NextResponse.json({ error: err.userMessage }, { status: err.statusCode });
+    }
+    console.error("[onboarding] unexpected error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+async function handlePost(req: NextRequest) {
   const parsed = Body.safeParse(await req.json());
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });

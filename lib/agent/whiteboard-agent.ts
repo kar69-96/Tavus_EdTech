@@ -1,5 +1,6 @@
 import "server-only";
 import { getAnthropicClient } from "../api/anthropic-client";
+import { ConfigError } from "../errors";
 import { uploadToBlob } from "../blob/upload";
 import { insertWhiteboard } from "../db/whiteboards";
 
@@ -46,12 +47,22 @@ export async function generateWhiteboardWidget(options: {
       { role: "user", content: attempt === 1 ? userContent : `${userContent}\n\nPrevious attempt failed: ${lastError}\n\nFix it and return valid HTML only.` },
     ];
 
-    const msg = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4096,
-      system: SYSTEM,
-      messages,
-    });
+    let msg: Awaited<ReturnType<typeof client.messages.create>>;
+    try {
+      msg = await client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        system: SYSTEM,
+        messages,
+      });
+    } catch (err: unknown) {
+      const status = (err as { status?: number }).status;
+      if (status === 401) {
+        console.error("[whiteboard-agent] Anthropic authentication error:", err);
+        throw new ConfigError("AI service authentication failed — check ANTHROPIC_API_KEY", err);
+      }
+      throw err;
+    }
 
     html = (msg.content[0] as { type: string; text: string }).text.trim();
 

@@ -1,5 +1,6 @@
 import "server-only";
 import type Anthropic from "@anthropic-ai/sdk";
+import { ConfigError } from "../errors";
 import { getAnthropicClient } from "../api/anthropic-client";
 import { getDocById } from "../db/documents";
 import { insertTurn, getTurns } from "../db/turns";
@@ -58,84 +59,87 @@ export async function* runPalAgent(options: {
   const client = getAnthropicClient();
   let fullAssistantText = "";
 
-  // Agentic loop — tool calls may be nested
-  while (true) {
-    const stream = client.messages.stream({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1024,
-      system: systemPrompt,
-      tools: [docFetchTool, whiteboardTool],
-      messages,
-    });
+  try {
+    // Agentic loop — tool calls may be nested
+    while (true) {
+      const stream = client.messages.stream({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1024,
+        system: systemPrompt,
+        tools: [docFetchTool, whiteboardTool],
+        messages,
+      });
 
-    const toolUseBlocks: Anthropic.ToolUseBlock[] = [];
-    let currentText = "";
+      const toolUseBlocks: Anthropic.ToolUseBlock[] = [];
 
-    for await (const event of stream) {
-      if (event.type === "content_block_delta") {
-        if (event.delta.type === "text_delta") {
-          currentText += event.delta.text;
-          fullAssistantText += event.delta.text;
-          yield { type: "text", text: event.delta.text };
-        }
-      } else if (event.type === "content_block_stop") {
-        // captured via message snapshot below
-      }
-    }
-
-    const finalMsg = await stream.finalMessage();
-
-    // Collect tool use blocks
-    for (const block of finalMsg.content) {
-      if (block.type === "tool_use") {
-        toolUseBlocks.push(block);
-      }
-    }
-
-    if (finalMsg.stop_reason !== "tool_use" || toolUseBlocks.length === 0) {
-      break;
-    }
-
-    // Process tool calls
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
-
-    for (const tool of toolUseBlocks) {
-      if (tool.name === "doc_fetch") {
-        const input = tool.input as { doc_id: string };
-        try {
-          const doc = await getDocById(input.doc_id);
-          if (!doc) {
-            toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: "Document not found." });
-          } else {
-            const text = await fetchBlobText(doc.blob_url, doc.content_type);
-            toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: text });
+      for await (const event of stream) {
+        if (event.type === "content_block_delta") {
+          if (event.delta.type === "text_delta") {
+            fullAssistantText += event.delta.text;
+            yield { type: "text", text: event.delta.text };
           }
-        } catch (err) {
-          toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: `Error: ${String(err)}` });
-        }
-      } else if (tool.name === "whiteboard") {
-        const input = tool.input as { concept: string; prior_widget_url?: string };
-        try {
-          let priorHtml: string | undefined;
-          if (input.prior_widget_url) {
-            const res = await fetch(input.prior_widget_url);
-            if (res.ok) priorHtml = await res.text();
-          }
-          const widgetUrl = await generateWhiteboardWidget({
-            concept: input.concept,
-            priorWidgetHtml: priorHtml,
-            sessionId,
-          });
-          yield { type: "whiteboard", widgetUrl };
-          toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: JSON.stringify({ widget_url: widgetUrl }) });
-        } catch (err) {
-          toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: `Whiteboard failed: ${String(err)}` });
         }
       }
-    }
 
-    messages.push({ role: "assistant", content: finalMsg.content });
-    messages.push({ role: "user", content: toolResults });
+      const finalMsg = await stream.finalMessage();
+
+      for (const block of finalMsg.content) {
+        if (block.type === "tool_use") {
+          toolUseBlocks.push(block);
+        }
+      }
+
+      if (finalMsg.stop_reason !== "tool_use" || toolUseBlocks.length === 0) {
+        break;
+      }
+
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+      for (const tool of toolUseBlocks) {
+        if (tool.name === "doc_fetch") {
+          const input = tool.input as { doc_id: string };
+          try {
+            const doc = await getDocById(input.doc_id);
+            if (!doc) {
+              toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: "Document not found." });
+            } else {
+              const text = await fetchBlobText(doc.blob_url, doc.content_type);
+              toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: text });
+            }
+          } catch (err) {
+            toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: `Error: ${String(err)}` });
+          }
+        } else if (tool.name === "whiteboard") {
+          const input = tool.input as { concept: string; prior_widget_url?: string };
+          try {
+            let priorHtml: string | undefined;
+            if (input.prior_widget_url) {
+              const res = await fetch(input.prior_widget_url);
+              if (res.ok) priorHtml = await res.text();
+            }
+            const widgetUrl = await generateWhiteboardWidget({
+              concept: input.concept,
+              priorWidgetHtml: priorHtml,
+              sessionId,
+            });
+            yield { type: "whiteboard", widgetUrl };
+            toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: JSON.stringify({ widget_url: widgetUrl }) });
+          } catch (err) {
+            toolResults.push({ type: "tool_result", tool_use_id: tool.id, content: `Whiteboard failed: ${String(err)}` });
+          }
+        }
+      }
+
+      messages.push({ role: "assistant", content: finalMsg.content });
+      messages.push({ role: "user", content: toolResults });
+    }
+  } catch (err: unknown) {
+    const status = (err as { status?: number }).status;
+    if (status === 401) {
+      console.error("[pal-agent] Anthropic authentication error:", err);
+      throw new ConfigError("AI service authentication failed — check ANTHROPIC_API_KEY", err);
+    }
+    throw err;
   }
 
   if (fullAssistantText) {
